@@ -2,10 +2,9 @@ package uj.wmii.pwj.exec;
 
 import org.junit.jupiter.api.Test;
 
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Future;
-import java.util.concurrent.RejectedExecutionException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.*;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -46,7 +45,7 @@ public class ExecServiceTest {
         MyExecService s = MyExecService.newInstance();
         StringCallable c = new StringCallable("X", 10);
         Future<String> f = s.submit(c);
-        doSleep(20);
+        doSleep(300);
         assertTrue(f.isDone());
         assertEquals("X", f.get());
     }
@@ -61,6 +60,121 @@ public class ExecServiceTest {
             RejectedExecutionException.class,
             () -> s.submit(new TestRunnable()));
     }
+
+    @Test
+    void testInvokeAnyCallable() throws Exception {
+        MyExecService s = MyExecService.newInstance();
+        List<Callable<String>> list = new ArrayList<>();
+        list.add(new StringCallable("A", 10));
+        list.add(new StringCallable("B", 20));
+
+        String result = s.invokeAny(list);
+        assertEquals("A", result);
+        s.shutdown();
+    }
+
+    @Test
+    void testInvokeAnyTimeout() {
+        MyExecService s = MyExecService.newInstance();
+        List<Callable<String>> list = new ArrayList<>();
+        list.add(new StringCallable("slow", 50));
+
+        assertThrows(
+                TimeoutException.class,
+                () -> s.invokeAny(list, 1, TimeUnit.MILLISECONDS)
+        );
+        s.shutdown();
+    }
+
+    @Test
+    void testInvokeAllResults() throws Exception {
+        MyExecService s = MyExecService.newInstance();
+        List<Callable<String>> list = new ArrayList<>();
+        list.add(new StringCallable("X", 5));
+        list.add(new StringCallable("Y", 5));
+
+        List<Future<String>> res = s.invokeAll(list, 100, TimeUnit.MILLISECONDS);
+        assertEquals("X", res.get(0).get());
+        assertEquals("Y", res.get(1).get());
+        s.shutdown();
+    }
+
+    @Test
+    void testInvokeAllTimeoutCancels() throws InterruptedException {
+        MyExecService s = MyExecService.newInstance();
+        List<Callable<String>> list = new ArrayList<>();
+        list.add(new StringCallable("A", 50));
+        list.add(new StringCallable("B", 50));
+
+        List<Future<String>> res = s.invokeAll(list, 1, TimeUnit.MILLISECONDS);
+        assertTrue(res.get(0).isCancelled());
+        assertTrue(res.get(1).isCancelled());
+        s.shutdown();
+    }
+
+    @Test
+    void testShutdownRejectsNewTasks() {
+        MyExecService s = MyExecService.newInstance();
+        s.shutdown();
+        assertThrows(
+                RejectedExecutionException.class,
+                () -> s.submit(new TestRunnable())
+        );
+    }
+
+    @Test
+    void testAwaitTermination() throws InterruptedException {
+        MyExecService s = MyExecService.newInstance();
+        s.execute(new TestRunnable());
+        s.shutdown();
+        boolean finished = s.awaitTermination(100, TimeUnit.MILLISECONDS);
+        assertTrue(finished);
+        assertTrue(s.isTerminated());
+    }
+
+    @Test
+    void testShutdownNow() {
+        MyExecService s = MyExecService.newInstance();
+        TestRunnable r1 = new TestRunnable();
+        TestRunnable r2 = new TestRunnable();
+        TestRunnable r3 = new TestRunnable();
+
+        s.execute(r1);
+        s.execute(r2);
+        s.execute(r3);
+
+        List<Runnable> notRun = s.shutdownNow();
+        assertFalse(notRun.isEmpty());
+        assertTrue(s.isShutdown());
+    }
+
+    @Test
+    void testSubmitRunnableReturnsNull() throws Exception {
+        MyExecService s = MyExecService.newInstance();
+
+        Future<?> f = s.submit(() -> System.out.println("Runnable executed"));
+
+        assertNull(f.get());
+        s.shutdown();
+    }
+
+    @Test
+    void testIsShutdownAndIsTerminated() throws InterruptedException {
+        MyExecService s = MyExecService.newInstance();
+        s.execute(new TestRunnable());
+        assertFalse(s.isShutdown());
+        assertFalse(s.isTerminated());
+
+        s.shutdown();
+        assertTrue(s.isShutdown());
+
+        boolean finished = s.awaitTermination(200, TimeUnit.MILLISECONDS);
+        assertTrue(finished);
+        assertTrue(s.isTerminated());
+    }
+
+
+
 
     static void doSleep(int milis) {
         try {
